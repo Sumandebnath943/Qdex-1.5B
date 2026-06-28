@@ -28,12 +28,20 @@ then SHUT DOWN the session. A forgotten GPU is the only money risk.
 # !git clone https://github.com/Sumandebnath943/Qdex-1.5B.git
 # %cd Qdex-1.5B
 
+# Kaggle's GPU options are "GPU T4 x2" or "GPU P100". Choose **GPU T4 x2**:
+# the T4 is the chip our stack (Unsloth + 4-bit) is built for; P100 is older and
+# unsupported by Unsloth. We pin to ONE of the two T4s so the trainer doesn't try
+# to split across both (which breaks with quantized models). This env var is set
+# before importing torch and is inherited by every later `!python ...` step.
+# import os
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 # OPTIONAL — avoid Hugging Face download rate limits. The model + dataset are
 # public (no token strictly required), but a token gives faster, reliable
 # downloads. SAFEST way: add it as a Kaggle Secret named HF_TOKEN
 #   (Notebook -> Add-ons -> Secrets -> add HF_TOKEN), then:
 # from kaggle_secrets import UserSecretsClient
-# import os; os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
+# os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
 
 # Install order matters: Unsloth first (it patches torch), then the rest.
 # Kaggle already ships a CUDA-enabled torch, so we don't reinstall it.
@@ -42,8 +50,9 @@ then SHUT DOWN the session. A forgotten GPU is the only money risk.
 # !pip install -q datasets "transformers>=4.44" bitsandbytes tqdm
 
 # import torch
+# print("Visible GPUs:", torch.cuda.device_count(), "(should be 1 after the pin)")
 # print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available()
-#       else "NONE — go to Session options and select 'GPU T4 x1'!")
+#       else "NONE — set Accelerator to 'GPU T4 x2'!")
 
 
 # ============================================================================

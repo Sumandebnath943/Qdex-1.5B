@@ -35,10 +35,15 @@ Each `===== CELL n =====` block goes in its own Kaggle cell.
 ## Step 2 — Turn on the GPU (critical)
 
 1. Right sidebar → **Session options** → **Accelerator**.
-2. Choose **GPU T4 x1** (just one — we don't need two; the 1.5B model uses only
-   ~6 GB of the 16 GB).
+2. Kaggle offers **GPU T4 x2** or **GPU P100**. Choose **GPU T4 x2**.
+   - *Why not P100?* It's an older chip (2016) that our training tool Unsloth
+     does not support — it would fail.
+   - *Why x2 when we only need one?* That's just the only T4 option Kaggle
+     offers. We pin the run to a single T4 (CELL 1 sets `CUDA_VISIBLE_DEVICES=0`)
+     so the trainer doesn't try to split across both GPUs, which breaks with
+     quantized models. The 1.5B model uses only ~6 GB of one T4's 16 GB.
 3. If prompted, confirm your phone number (one-time, free).
-4. Confirm the sidebar shows **GPU T4 x1** with a green dot.
+4. Confirm the sidebar shows **GPU T4 x2** with a green dot.
 
 ## Step 3 — (Optional) Add your Hugging Face token as a Secret
 
