@@ -37,10 +37,11 @@ MAX_SEQ_LEN = 2048
 # Conservative defaults for a first QLoRA run on a single ~16GB GPU.
 LORA_RANK = 16          # size of the adapter matrices - 16 is a good default
 LORA_ALPHA = 32         # scaling factor - conventionally 2x rank
-LORA_DROPOUT = 0.05     # light regularization
+LORA_DROPOUT = 0.0      # 0 unlocks Unsloth's fast LoRA path (big speedup);
+                        # negligible quality difference vs 0.05 at this scale
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj",
                   "gate_proj", "up_proj", "down_proj"]  # all linear layers
-NUM_EPOCHS = 3          # conservative; Magicoder examples are short
+NUM_EPOCHS = 2          # 2 passes is the SFT sweet spot; 3rd adds time + overfit risk
 BATCH_SIZE = 2          # per-device; small for memory safety on T4
 GRAD_ACCUM = 4          # effective batch size = 2 x 4 = 8
 LEARNING_RATE = 2e-4    # standard QLoRA rate for small models

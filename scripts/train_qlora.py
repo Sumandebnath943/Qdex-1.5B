@@ -52,6 +52,9 @@ def parse_args():
     ap.add_argument("--max-steps", type=int, default=-1,
                     help="Cap total optimizer steps (default -1 = use epochs). "
                          "Set 2 for a quick dry run.")
+    ap.add_argument("--resume", action="store_true",
+                    help="Resume from the latest checkpoint in outputs/checkpoints/ "
+                         "(use this if a run disconnected partway).")
     return ap.parse_args()
 
 
@@ -151,7 +154,7 @@ def main():
         train_dataset=formatted,
         args=sft_config,
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume)
     if trainer.state.log_history:
         last = trainer.state.log_history[-1]
         print(f"\n  Final loss: {last.get('loss', last.get('train_loss', 'N/A'))}")
