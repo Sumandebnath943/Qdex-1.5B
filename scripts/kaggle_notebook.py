@@ -1,202 +1,102 @@
-"""KAGGLE NOTEBOOK — Full pipeline in one cell (train + merge + GGUF export).
+"""KAGGLE NOTEBOOK CELLS — Qdex-1.5B full pipeline (clone-and-run, one session).
 
-HOW TO USE (detailed steps in scripts/kaggle_run.md):
-  1. Create a Kaggle Notebook with GPU = "GPU T4 x1" enabled.
-  2. Copy this ENTIRE file's contents into a single notebook cell.
-  3. Run the cell. It installs deps, trains, merges, and exports GGUF.
-  4. When done, download outputs/lora_adapter/, outputs/merged/, outputs/gguf/
-     from the notebook's /kaggle/working/ directory.
-  5. SHUT DOWN the notebook session immediately after downloading.
+This file is a REFERENCE for the cells you paste into a Kaggle notebook. Each
+block marked "# ===== CELL n =====" goes into its OWN Kaggle cell, run in order.
+The step-by-step screenshot guide is in scripts/kaggle_run.md.
 
-ESTIMATED RUN TIME on T4: ~3-4 hours total (train ~2.5h + merge ~5m + export ~20m).
-ESTIMATED COST: ₹0 (Kaggle free tier).
+Why clone-and-run (not one giant pasted blob):
+  The notebook clones THIS repo and runs the real, verified scripts
+  (scripts/train_qlora.py, run_benchmark.py, merge_lora.py, export_gguf.py).
+  That means the code on Kaggle is identical to the code we tested locally —
+  nothing to keep in sync by hand.
 
-This file is SELF-CONTAINED — it does not import from the project's src/ because
-Kaggle notebooks don't have the project files uploaded. All logic is inlined.
-The modular scripts/ versions exist for reference and local iteration.
+Everything runs in ONE Kaggle session (~3.5 hours total, INR 0 on the free T4):
+  CELL 1  setup (clone + install)                      ~5 min
+  CELL 2  benchmark BASE model (the honest "before")   ~20 min
+  CELL 3  train + merge + export to GGUF               ~3 hours
+  CELL 4  benchmark FINE-TUNED model (the "after")     ~10 min
+
+After CELL 4: download outputs/ (the .gguf files + the bench_*.json numbers),
+then SHUT DOWN the session. A forgotten GPU is the only money risk.
 """
-# ============================================================================
-# CELL 1 — Install dependencies (runs once, ~3 min)
-# ============================================================================
-# Unsloth must be installed BEFORE torch/trl in a specific order.
-# These commands are for Kaggle's Python 3.10 + Tesla T4 environment.
-import subprocess
-subprocess.run(["pip", "install", "-q", "unsloth"], check=True)
-subprocess.run(["pip", "install", "-q", "--no-deps", "trl", "peft", "accelerate"],
-               check=True)
-subprocess.run(["pip", "install", "-q", "datasets", "transformers>=4.44",
-                "bitsandbytes"], check=True)
-print("Dependencies installed.")
 
 # ============================================================================
-# CONFIGURATION (mirrors config.py)
+# ===== CELL 1 ===== Setup: clone the repo + install GPU libraries (~5 min)
 # ============================================================================
-BASE_MODEL = "Qwen/Qwen2.5-Coder-1.5B"
-DATASET_NAME = "ise-uiuc/Magicoder-OSS-Instruct-75K"
-DATASET_SLICE = 20000
-SYSTEM_PROMPT = (
-    "You are a helpful coding assistant. "
-    "Respond with clean, correct, well-structured code and brief explanations."
-)
-MAX_SEQ_LEN = 2048
-LORA_RANK = 16
-LORA_ALPHA = 32
-LORA_DROPOUT = 0.05
-TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj",
-                  "gate_proj", "up_proj", "down_proj"]
-NUM_EPOCHS = 3
-BATCH_SIZE = 2
-GRAD_ACCUM = 4
-LEARNING_RATE = 2e-4
-WARMUP_RATIO = 0.03
-SAVE_STEPS = 200
+# (In Kaggle these lines with '!' and '%' are notebook magics — paste as-is.)
 
-# Qwen ChatML template (same as src/chat_template.py)
-QWEN_CHATML_TEMPLATE = (
-    "{% for message in messages %}"
-    "{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n'}}"
-    "{% endfor %}"
-    "{% if add_generation_prompt %}"
-    "{{'<|im_start|>assistant\\n'}}"
-    "{% endif %}"
-)
+# !git clone https://github.com/Sumandebnath943/Qdex-1.5B.git
+# %cd Qdex-1.5B
 
-# Kaggle working directory (outputs here get saved with the notebook)
-import os
-OUTPUT_DIR = "/kaggle/working/outputs"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+# OPTIONAL — avoid Hugging Face download rate limits. The model + dataset are
+# public (no token strictly required), but a token gives faster, reliable
+# downloads. SAFEST way: add it as a Kaggle Secret named HF_TOKEN
+#   (Notebook -> Add-ons -> Secrets -> add HF_TOKEN), then:
+# from kaggle_secrets import UserSecretsClient
+# import os; os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
+
+# Install order matters: Unsloth first (it patches torch), then the rest.
+# Kaggle already ships a CUDA-enabled torch, so we don't reinstall it.
+# !pip install -q unsloth
+# !pip install -q --no-deps trl peft accelerate
+# !pip install -q datasets "transformers>=4.44" bitsandbytes tqdm
+
+# import torch
+# print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available()
+#       else "NONE — go to Session options and select 'GPU T4 x1'!")
+
 
 # ============================================================================
-# STEP 1 — Load model in 4-bit + attach LoRA
+# ===== CELL 2 ===== Benchmark the BASE model — the honest "before" (~20 min)
 # ============================================================================
-import torch
-from unsloth import FastLanguageModel
+# We measure the base model TWICE, on purpose:
+#   - completion mode : how the research paper reports it (~41% expected).
+#   - instruction mode: the SAME mode the fine-tuned model is judged in, so the
+#                       before/after is a fair, apples-to-apples comparison.
 
-print(f"\n{'='*60}\nLoading {BASE_MODEL} in 4-bit...\n{'='*60}")
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name=BASE_MODEL,
-    max_seq_length=MAX_SEQ_LEN,
-    dtype=None,
-    load_in_4bit=True,
-)
-if tokenizer.chat_template is None:
-    tokenizer.chat_template = QWEN_CHATML_TEMPLATE
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
+# !python scripts/run_benchmark.py \
+#     --model-path Qwen/Qwen2.5-Coder-1.5B --mode completion \
+#     --n-samples 1 --temperature 0.0 \
+#     --output outputs/bench_base_completion.json
 
-model = FastLanguageModel.get_peft_model(
-    model,
-    r=LORA_RANK,
-    target_modules=TARGET_MODULES,
-    lora_alpha=LORA_ALPHA,
-    lora_dropout=LORA_DROPOUT,
-    bias="none",
-    use_gradient_checkpointing="unsloth",
-    random_state=42,
-)
-print("Model loaded + LoRA attached.")
+# !python scripts/run_benchmark.py \
+#     --model-path Qwen/Qwen2.5-Coder-1.5B --mode instruction \
+#     --n-samples 1 --temperature 0.0 \
+#     --output outputs/bench_base_instruction.json
+
 
 # ============================================================================
-# STEP 2 — Load + format dataset
+# ===== CELL 3 ===== Train + merge + export to GGUF (~3 hours)
 # ============================================================================
-from datasets import load_dataset
+# Each script reloads from disk and is independently re-runnable, so if one step
+# fails you re-run just that step (checkpoints are saved every 200 training
+# steps in outputs/checkpoints/).
 
-print(f"\n{'='*60}\nLoading {DATASET_SLICE} examples from {DATASET_NAME}...\n{'='*60}")
-ds = load_dataset(DATASET_NAME, split="train").select(range(DATASET_SLICE))
+# !python scripts/train_qlora.py     # QLoRA fine-tune -> outputs/lora_adapter/
+# !python scripts/merge_lora.py      # merge adapter into base -> outputs/merged/
+# !python scripts/export_gguf.py     # quantize to GGUF -> outputs/gguf/*.gguf
 
-def format_example(example):
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": example["problem"]},
-        {"role": "assistant", "content": example["solution"]},
-    ]
-    text = tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=False
-    )
-    return {"text": text}
-
-formatted = ds.map(format_example, remove_columns=ds.column_names, desc="Formatting")
-print(f"Formatted {len(formatted)} examples.")
-print(f"Sample (first 200 chars):\n{formatted[0]['text'][:200]}...")
 
 # ============================================================================
-# STEP 3 — Train
+# ===== CELL 4 ===== Benchmark the FINE-TUNED model — the "after" (~10 min)
 # ============================================================================
-from transformers import TrainingArguments
-from trl import SFTTrainer
+# !python scripts/run_benchmark.py \
+#     --model-path outputs/merged --mode instruction \
+#     --n-samples 1 --temperature 0.0 \
+#     --output outputs/bench_finetuned_instruction.json
 
-print(f"\n{'='*60}\nTraining {NUM_EPOCHS} epochs...\n{'='*60}")
-use_bf16 = torch.cuda.is_bf16_supported()
-trainer = SFTTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    train_dataset=formatted,
-    dataset_text_field="text",
-    max_seq_length=MAX_SEQ_LEN,
-    packing=False,
-    args=TrainingArguments(
-        output_dir=f"{OUTPUT_DIR}/checkpoints",
-        num_train_epochs=NUM_EPOCHS,
-        per_device_train_batch_size=BATCH_SIZE,
-        gradient_accumulation_steps=GRAD_ACCUM,
-        learning_rate=LEARNING_RATE,
-        warmup_ratio=WARMUP_RATIO,
-        lr_scheduler_type="cosine",
-        logging_steps=10,
-        save_steps=SAVE_STEPS,
-        save_total_limit=3,
-        save_strategy="steps",
-        fp16=not use_bf16,
-        bf16=use_bf16,
-        optim="adamw_8bit",
-        weight_decay=0.01,
-        max_grad_norm=1.0,
-        seed=42,
-        report_to="none",
-        dataloader_num_workers=2,
-    ),
-)
-trainer_stats = trainer.train()
+# Print the before/after table:
+# import json
+# rows = [
+#     ("BASE  (completion)",  "outputs/bench_base_completion.json"),
+#     ("BASE  (instruction)", "outputs/bench_base_instruction.json"),
+#     ("Qdex  (instruction)", "outputs/bench_finetuned_instruction.json"),
+# ]
+# print(f"{'model':22} {'passed':>8}   pass@1")
+# for label, path in rows:
+#     d = json.load(open(path))
+#     print(f"{label:22} {d['passed_problems']:>3}/{d['total_problems']:<3}   "
+#           f"{d['pass_at_1']*100:5.1f}%")
 
-# Save adapter
-adapter_path = f"{OUTPUT_DIR}/lora_adapter"
-model.save_pretrained(adapter_path)
-tokenizer.save_pretrained(adapter_path)
-print(f"\nAdapter saved to {adapter_path}")
-print(f"Training loss: {trainer_stats.training_loss:.4f}")
-
-# ============================================================================
-# STEP 4 — Merge adapter into base (fp16)
-# ============================================================================
-print(f"\n{'='*60}\nMerging adapter into base model...\n{'='*60}")
-merged_path = f"{OUTPUT_DIR}/merged"
-model.save_pretrained_merged(merged_path, tokenizer, save_method="merged_16bit")
-print(f"Merged model saved to {merged_path}")
-
-# ============================================================================
-# STEP 5 — Export to GGUF (q4_k_m + q5_k_m)
-# ============================================================================
-print(f"\n{'='*60}\nExporting to GGUF...\n{'='*60}")
-gguf_path = f"{OUTPUT_DIR}/gguf"
-for method in ["q4_k_m", "q5_k_m"]:
-    print(f"  Exporting {method}...")
-    model.save_pretrained_gguf(gguf_path, tokenizer, quantization_method=method)
-
-# ============================================================================
-# STEP 6 — Summary
-# ============================================================================
-print(f"\n{'='*60}\nPIPELINE COMPLETE\n{'='*60}")
-print(f"Adapter:  {adapter_path}")
-print(f"Merged:   {merged_path}")
-print(f"GGUF dir: {gguf_path}")
-import glob
-for f in sorted(glob.glob(f"{gguf_path}/*.gguf")):
-    size_mb = os.path.getsize(f) / (1024 * 1024)
-    print(f"  {os.path.basename(f)}: {size_mb:.0f} MB")
-
-print("\n>>> ACTION REQUIRED <<<")
-print("1. Download the outputs/ folder from /kaggle/working/")
-print("   (especially the .gguf files and lora_adapter/)")
-print("2. SHUT DOWN this notebook session NOW to free the GPU.")
-print("3. Locally: test the GGUF with Ollama (see scripts/local_gguf_test.md)")
-print("4. Benchmark: re-run scripts/run_benchmark.py with --model-path outputs/merged")
+# >>> THEN: download the outputs/ folder (.gguf files + bench_*.json),
+# >>> and SHUT DOWN the session (Session options -> Stop session).

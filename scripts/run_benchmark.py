@@ -160,8 +160,10 @@ def main():
                     help="Samples per problem. 1 = greedy pass@1 (fast, deterministic).")
     ap.add_argument("--temperature", type=float, default=0.0,
                     help="0.0 = greedy. >0 = sampling (use with n-samples > 1).")
-    ap.add_argument("--max-new-tokens", type=int, default=256,
-                    help="Max generation length per sample.")
+    ap.add_argument("--max-new-tokens", type=int, default=512,
+                    help="Max generation length per sample. 512 avoids truncating "
+                         "longer valid solutions; applied equally to base + "
+                         "fine-tuned so the before/after stays comparable.")
     ap.add_argument("--max-problems", type=int, default=None,
                     help="Limit to N problems (for quick tests). Default: all 164.")
     ap.add_argument("--output", required=True,
