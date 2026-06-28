@@ -13,6 +13,11 @@ Run from the project root:
 import sys
 from pathlib import Path
 
+# Windows consoles default to a non-Unicode code page (cp1252) and crash when
+# printing non-Latin characters that appear in the dataset. Force UTF-8 output.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # Make the project root importable when running as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
