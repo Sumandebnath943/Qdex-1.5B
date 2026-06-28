@@ -1,0 +1,7 @@
+# Stage 1 dependencies (local, no GPU, no model weights)
+# Used only for data loading + format validation on the owner's laptop.
+# Heavy training deps (torch, unsloth, peft, trl) live in requirements-kaggle.txt
+# and are only needed in Stage 3 on the rented GPU.
+
+datasets>=2.16,<4
+transformers>=4.44

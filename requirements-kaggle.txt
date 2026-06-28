@@ -1,0 +1,15 @@
+# Stage 3+ dependencies (installed on the Kaggle GPU, NOT on the laptop).
+# These are the heavy ML libraries needed for QLoRA training + benchmarking.
+#
+# NOTE: Unsloth must be installed in a specific order (it patches torch).
+# The Kaggle notebook will install these with the exact commands - do not
+# pip install this file directly. See scripts/train_kaggle.md in Stage 3.
+
+torch>=2.1
+transformers>=4.44
+datasets>=2.16,<4
+accelerate>=0.34
+peft>=0.12
+trl>=0.9
+bitsandbytes>=0.43
+unsloth>=2024.8

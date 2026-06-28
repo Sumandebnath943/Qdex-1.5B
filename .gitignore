@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Data (downloaded at runtime, large, not version-controlled)
+data/*
+!data/.gitkeep
+
+# Model outputs, checkpoints, merged models (large, not version-controlled)
+outputs/*
+!outputs/.gitkeep
+checkpoints/
+*.gguf
+*.safetensors
+*.bin
+
+# Kaggle / Jupyter
+.kaggle/
+*.ipynb_checkpoints/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.claude/
+
+# Original z.ai handoff archive (kept locally, not version-controlled)
+_handoff_archive/
+
+# Logs
+*.log
+wandb/
