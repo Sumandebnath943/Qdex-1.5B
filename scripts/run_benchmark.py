@@ -38,7 +38,7 @@ from tqdm import tqdm  # noqa: E402
 from config import BASE_MODEL, SYSTEM_PROMPT, OUTPUTS_DIR  # noqa: E402
 from src.benchmark import (  # noqa: E402
     HUMANEVAL_DATASET, aggregate_results, build_instruction_messages,
-    extract_code_completion, extract_code_instruction, pass_at_k, run_solution,
+    candidate_programs, extract_code_completion, pass_at_k, run_solution,
 )
 from src.chat_template import QWEN_CHATML_TEMPLATE  # noqa: E402
 
@@ -122,29 +122,42 @@ def benchmark_model(model_path: str, mode: str, n_samples: int,
             })
             continue
 
-        # Extract + test each sample.
+        # Extract + test each sample. For instruction mode we try a couple of
+        # runnable candidates (see candidate_programs) so lossy extraction
+        # doesn't fail a correct solution; a sample passes if ANY candidate does.
         n_passed = 0
         errors = []
         for comp in completions:
             if mode == "completion":
-                code = extract_code_completion(problem["prompt"], comp)
+                candidates = [extract_code_completion(problem["prompt"], comp)]
             else:
-                code = extract_code_instruction(comp)
-            passed, msg = run_solution(code, problem["test"], problem["entry_point"])
+                candidates = candidate_programs(
+                    comp, problem["prompt"], problem["entry_point"])
+            passed, msg = False, "empty generation"
+            for code in candidates:
+                passed, msg = run_solution(
+                    code, problem["test"], problem["entry_point"])
+                if passed:
+                    break
             if passed:
                 n_passed += 1
             else:
                 errors.append(msg)
 
         p1 = pass_at_k(n_passed, n_samples, k=1)
-        per_problem.append({
+        rec = {
             "task_id": problem["task_id"],
             "passed": p1 >= 1.0,
             "n_passed": n_passed,
             "n_total": n_samples,
             "pass_at_1": p1,
             "errors": errors[:3],  # keep small
-        })
+        }
+        # Save one raw generation for any FAILED problem, so we can eyeball the
+        # real failure mode (wrong logic vs. a formatting/extraction artifact).
+        if p1 < 1.0 and completions:
+            rec["generation_sample"] = completions[0][:800]
+        per_problem.append(rec)
 
     return aggregate_results(model_path, mode, n_samples, temperature, per_problem)
 

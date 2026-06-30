@@ -94,16 +94,53 @@ def extract_code_completion(prompt: str, completion: str) -> str:
 def extract_code_instruction(text: str) -> str:
     """Extract Python code from an instruction-mode assistant response.
 
-    Looks for a fenced code block (```python ... ``` or ``` ... ```). Falls back
-    to the raw text if no fence is found (some models omit fences).
+    Robust to the shapes instruction-tuned models actually produce:
+      - a ```python / ```py / bare ``` fenced block (preferred),
+      - an UNCLOSED fence (generation truncated before the closing ```),
+      - no fence at all (raw code, possibly with prose around it).
     """
-    match = re.search(r"```python\s*\n(.*?)```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    match = re.search(r"```\s*\n(.*?)```", text, re.DOTALL)
-    if match:
-        return match.group(1).strip()
+    # 1. A properly closed fenced block (prefer a python-tagged one).
+    for pat in (r"```(?:python|py)[ \t]*\n(.*?)```", r"```[ \t]*\n(.*?)```"):
+        m = re.search(pat, text, re.DOTALL)
+        if m:
+            return m.group(1).strip()
+    # 2. Unclosed fence: take everything after the opening fence.
+    m = re.search(r"```(?:python|py)?[ \t]*\n(.*)", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # 3. No fence: use the raw text as-is.
     return text.strip()
+
+
+def candidate_programs(generation: str, prompt: str, entry_point: str) -> List[str]:
+    """Runnable program variants to try (in order) for instruction mode.
+
+    Instruction-tuned models answer in different shapes: a full self-contained
+    function, just the body, or code that drops the prompt's imports/signature.
+    We extract the code, then offer up to two candidates:
+      1. the extracted code as-is (self-contained answers pass here);
+      2. the original prompt prepended to the extracted code, which recovers
+         answers that gave only the body or omitted the prompt's imports.
+
+    Honesty note: prepending the prompt can only ever turn a FAIL into a PASS
+    when the model's code is *actually correct* — the official `check()` tests
+    behavior, so wrong logic still fails. This fixes lossy extraction; it does
+    not inflate the score. The same two-candidate logic, if anything, makes the
+    instruction score MORE comparable to completion mode (which always keeps the
+    prompt).
+    """
+    code = extract_code_instruction(generation)
+    variants = [code]
+    prepended = prompt.rstrip() + "\n" + code
+    if prepended != code:
+        variants.append(prepended)
+    # Body-only answers (no `def` at all): re-indent the lines and graft them
+    # onto the prompt's signature so the function is actually defined.
+    if "def " not in code:
+        body = "\n".join(
+            ("    " + ln if ln.strip() else ln) for ln in code.splitlines())
+        variants.append(prompt.rstrip() + "\n" + body)
+    return variants
 
 
 # ---------------------------------------------------------------------------
